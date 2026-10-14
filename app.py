@@ -10,7 +10,7 @@ import httpx
 
 app = FastAPI(title="HermesSec - Open-Source AI Code Audit & Side-Hustle Agent")
 
-BACKBOARD_API_KEY = os.getenv("BACKBOARD_API_KEY", "espr_L7vAV3KIuaMZywTOlcXS6_Acn5BVSQmMTTBkvab7nXI").strip()
+BACKBOARD_API_KEY = os.getenv("BACKBOARD_API_KEY", "").strip()
 BACKBOARD_BASE_URL = os.getenv("BACKBOARD_BASE_URL", "https://app.backboard.io/api").rstrip("/")
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
 
