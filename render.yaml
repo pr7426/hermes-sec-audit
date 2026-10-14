@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: hermes-sec-audit
+    runtime: docker
+    plan: starter
+    envVars:
+      - key: BACKBOARD_API_KEY
+        sync: false
+      - key: OLLAMA_BASE_URL
+        value: http://localhost:11434
