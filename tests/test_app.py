@@ -33,6 +33,7 @@ def test_ui_uses_text_content_for_findings():
     assert response.status_code == 200
     assert "textContent" in response.text
     assert "innerHTML" not in response.text
+    assert "X-Tenant-ID" in response.text
 
 
 def test_async_job_is_tenant_scoped_and_completes():

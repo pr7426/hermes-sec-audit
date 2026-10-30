@@ -156,14 +156,17 @@ def _request_id(request: Request) -> str:
 
 
 def _db() -> sqlite3.Connection:
-    connection = sqlite3.connect(AUDIT_DB_PATH)
+    connection = sqlite3.connect(AUDIT_DB_PATH, timeout=10)
     connection.row_factory = sqlite3.Row
+    connection.execute("PRAGMA busy_timeout=10000")
+    connection.execute("PRAGMA journal_mode=WAL")
     return connection
 
 
 def _init_db() -> None:
     with _db() as connection:
         connection.execute("CREATE TABLE IF NOT EXISTS audit_jobs (job_id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, status TEXT NOT NULL, created_at REAL NOT NULL, updated_at REAL NOT NULL, result_json TEXT, error TEXT)")
+        connection.execute("UPDATE audit_jobs SET status='failed', error='worker interrupted by process restart', updated_at=? WHERE status IN ('queued','running')", (time.time(),))
 
 
 def _save_job(job_id: str, tenant_id: str, status: str, result: Optional[Dict[str, Any]] = None, error: Optional[str] = None) -> None:
@@ -248,7 +251,7 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="HermesSec Enterprise Security Audit", version=APP_VERSION, lifespan=lifespan)
-app.add_middleware(CORSMiddleware, allow_origins=ALLOWED_ORIGINS or ["http://localhost:10000"], allow_credentials=False, allow_methods=["GET", "POST"], allow_headers=["Authorization", "Content-Type", "X-Request-ID"])
+app.add_middleware(CORSMiddleware, allow_origins=ALLOWED_ORIGINS or ["http://localhost:10000"], allow_credentials=False, allow_methods=["GET", "POST"], allow_headers=["Authorization", "Content-Type", "X-Request-ID", "X-Tenant-ID"])
 
 
 @app.middleware("http")
@@ -320,4 +323,4 @@ async def get_audit_job(job_id: str, request: Request):
 
 @app.get("/", response_class=HTMLResponse)
 async def ui():
-    return """<!doctype html><html lang='en'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>HermesSec Enterprise Audit</title><style>body{font:16px system-ui;background:#08111f;color:#e5edf7;max-width:1000px;margin:2rem auto;padding:0 1rem}textarea,input,button{width:100%;box-sizing:border-box;margin:.4rem 0;padding:.7rem;background:#0f1c2e;color:#e5edf7;border:1px solid #28415f;border-radius:6px}button{cursor:pointer;background:#138a65}pre{white-space:pre-wrap;background:#0f1c2e;padding:1rem;border-radius:6px}.finding{padding:.6rem;margin:.4rem 0;border-left:3px solid #f59e0b}</style></head><body><h1>HermesSec Enterprise Audit</h1><p>Automated pre-audit with deterministic triage and optional model review. Do not submit production secrets without an approved data-handling policy.</p><label>Client label<input id='client' value='Internal review'></label><label>Source code<textarea id='code' rows='14'>JWT_SECRET = "replace-me"\nquery = f"SELECT * FROM users WHERE name = '{name}'"</textarea></label><button id='run'>Run audit</button><section id='result' hidden><h2>Findings</h2><div id='findings'></div><h2>Primary report</h2><pre id='out1'></pre><h2>Comparison report</h2><pre id='out2'></pre></section><script>const $=id=>document.getElementById(id);$('run').onclick=async()=>{const r=await fetch('/api/audit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({client_name:$('client').value,code_snippet:$('code').value})});const d=await r.json();$('result').hidden=false;$('findings').replaceChildren(...(d.ast_findings||[]).map(f=>{const x=document.createElement('div');x.className='finding';x.textContent='['+f.severity+' · '+f.cwe+' · line '+f.line+'] '+f.title+' — '+f.snippet;return x;}));$('out1').textContent=d.gemma_report||d.detail||'';$('out2').textContent=d.comparison_report||'';};</script></body></html>"""
+    return """<!doctype html><html lang='en'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>HermesSec Enterprise Audit</title><style>body{font:16px system-ui;background:#08111f;color:#e5edf7;max-width:1000px;margin:2rem auto;padding:0 1rem}textarea,input,button{width:100%;box-sizing:border-box;margin:.4rem 0;padding:.7rem;background:#0f1c2e;color:#e5edf7;border:1px solid #28415f;border-radius:6px}button{cursor:pointer;background:#138a65}pre{white-space:pre-wrap;background:#0f1c2e;padding:1rem;border-radius:6px}.finding{padding:.6rem;margin:.4rem 0;border-left:3px solid #f59e0b}</style></head><body><h1>HermesSec Enterprise Audit</h1><p>Automated pre-audit with deterministic triage and optional model review. Do not submit production secrets without an approved data-handling policy.</p><label>Tenant ID<input id='tenant' value='default'></label><label>API token (if enabled)<input id='token' type='password' autocomplete='off'></label><label>Client label<input id='client' value='Internal review'></label><label>Source code<textarea id='code' rows='14'>JWT_SECRET = "replace-me"\nquery = f"SELECT * FROM users WHERE name = '{name}'"</textarea></label><button id='run'>Run audit</button><section id='result' hidden><h2>Findings</h2><div id='findings'></div><h2>Primary report</h2><pre id='out1'></pre><h2>Comparison report</h2><pre id='out2'></pre></section><script>const $=id=>document.getElementById(id);$('run').onclick=async()=>{const headers={'Content-Type':'application/json','X-Tenant-ID':$('tenant').value||'default'};if($('token').value)headers.Authorization='Bearer '+$('token').value;const r=await fetch('/api/audit',{method:'POST',headers,body:JSON.stringify({client_name:$('client').value,code_snippet:$('code').value})});const d=await r.json();$('result').hidden=false;$('findings').replaceChildren(...(d.ast_findings||[]).map(f=>{const x=document.createElement('div');x.className='finding';x.textContent='['+f.severity+' · '+f.cwe+' · line '+f.line+'] '+f.title+' — '+f.snippet;return x;}));$('out1').textContent=d.gemma_report||d.detail||'';$('out2').textContent=d.comparison_report||'';};</script></body></html>"""
