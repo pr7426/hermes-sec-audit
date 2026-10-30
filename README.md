@@ -14,7 +14,24 @@ HermesSec helps freelance penetration testers and application security consultan
 ```bash
 pip install -r requirements.txt
 export BACKBOARD_API_KEY="your_key" # Optional: falls back to local Ollama or AST engine
+export HERMES_API_TOKEN="change-me" # Recommended outside local development
+export HERMES_ALLOWED_ORIGINS="https://audit.example.com"
 uvicorn app:app --reload --port 10000
+```
+
+### Enterprise safeguards
+
+- `/api/audit` enforces Pydantic input bounds, request rate limiting, optional Bearer authentication, request IDs, security headers, and a health endpoint at `/healthz`.
+- Remote memory is disabled by default. Set `HERMES_ENABLE_REMOTE_MEMORY=true` only after reviewing the provider's retention policy and tenant isolation requirements.
+- Client supplied `thread_id` values are ignored by default. Enable them only in an authenticated, tenant-aware deployment with `HERMES_ALLOW_CLIENT_THREAD=true`.
+- Findings are rendered with DOM `textContent`; source snippets are shortened and likely credentials are redacted before returning them.
+- The automated result is a pre-audit signal. Production use should add language-specific SAST (for example Semgrep/Bandit), human review, and an approved data-handling policy.
+- If the operator installs Semgrep and sets `HERMES_ENABLE_SEMGREP=true`, the API adds optional Semgrep findings. Every response also includes a SARIF 2.1.0 document for code-scanning pipelines.
+
+Run the regression suite with:
+
+```bash
+pytest -q
 ```
 
 ## License

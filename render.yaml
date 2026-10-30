@@ -6,5 +6,11 @@ services:
     envVars:
       - key: BACKBOARD_API_KEY
         sync: false
-      - key: OLLAMA_BASE_URL
-        value: http://localhost:11434
+      - key: HERMES_API_TOKEN
+        sync: false
+      - key: HERMES_ALLOWED_ORIGINS
+        sync: false
+      - key: HERMES_ENABLE_REMOTE_MEMORY
+        value: "false"
+      - key: HERMES_RATE_LIMIT
+        value: "30"
