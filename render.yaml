@@ -3,6 +3,10 @@ services:
     name: hermes-sec-audit
     runtime: docker
     plan: starter
+    disk:
+      name: hermessec-data
+      mountPath: /var/data
+      sizeGB: 1
     envVars:
       - key: BACKBOARD_API_KEY
         sync: false
@@ -14,3 +18,5 @@ services:
         value: "false"
       - key: HERMES_RATE_LIMIT
         value: "30"
+      - key: HERMES_AUDIT_DB_PATH
+        value: /var/data/hermessec.db

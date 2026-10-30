@@ -33,3 +33,14 @@ def test_ui_uses_text_content_for_findings():
     assert response.status_code == 200
     assert "textContent" in response.text
     assert "innerHTML" not in response.text
+
+
+def test_async_job_is_tenant_scoped_and_completes():
+    response = client.post("/api/audit/jobs", headers={"X-Tenant-ID": "tenant-a"}, json={"client_name": "Acme", "code_snippet": "print(1)"})
+    assert response.status_code == 202
+    job_id = response.json()["job_id"]
+    completed = client.get(f"/api/audit/jobs/{job_id}", headers={"X-Tenant-ID": "tenant-a"})
+    assert completed.status_code == 200
+    assert completed.json()["status"] == "completed"
+    assert completed.json()["result"]["request_id"]
+    assert client.get(f"/api/audit/jobs/{job_id}", headers={"X-Tenant-ID": "tenant-b"}).status_code == 404

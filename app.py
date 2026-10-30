@@ -4,6 +4,7 @@ import json
 import os
 import re
 import shutil
+import sqlite3
 import subprocess
 import tempfile
 import time
@@ -13,7 +14,7 @@ from contextlib import asynccontextmanager
 from typing import Any, Deque, Dict, List, Optional
 
 import httpx
-from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
+from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -30,6 +31,7 @@ ALLOW_REMOTE_MEMORY = os.getenv("HERMES_ENABLE_REMOTE_MEMORY", "false").lower() 
 ALLOW_CLIENT_THREAD = os.getenv("HERMES_ALLOW_CLIENT_THREAD", "false").lower() == "true"
 ENABLE_SEMGREP = os.getenv("HERMES_ENABLE_SEMGREP", "false").lower() == "true"
 ALLOWED_ORIGINS = [x.strip() for x in os.getenv("HERMES_ALLOWED_ORIGINS", "").split(",") if x.strip()]
+AUDIT_DB_PATH = os.getenv("HERMES_AUDIT_DB_PATH", "hermessec.db")
 _rate_windows: Dict[str, Deque[float]] = defaultdict(deque)
 
 
@@ -153,6 +155,38 @@ def _request_id(request: Request) -> str:
     return request.headers.get("X-Request-ID", str(uuid.uuid4()))[:128]
 
 
+def _db() -> sqlite3.Connection:
+    connection = sqlite3.connect(AUDIT_DB_PATH)
+    connection.row_factory = sqlite3.Row
+    return connection
+
+
+def _init_db() -> None:
+    with _db() as connection:
+        connection.execute("CREATE TABLE IF NOT EXISTS audit_jobs (job_id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, status TEXT NOT NULL, created_at REAL NOT NULL, updated_at REAL NOT NULL, result_json TEXT, error TEXT)")
+
+
+def _save_job(job_id: str, tenant_id: str, status: str, result: Optional[Dict[str, Any]] = None, error: Optional[str] = None) -> None:
+    _init_db()
+    now = time.time()
+    with _db() as connection:
+        connection.execute("INSERT INTO audit_jobs(job_id, tenant_id, status, created_at, updated_at, result_json, error) VALUES(?,?,?,?,?,?,?) ON CONFLICT(job_id) DO UPDATE SET status=excluded.status, updated_at=excluded.updated_at, result_json=excluded.result_json, error=excluded.error", (job_id, tenant_id, status, now, now, json.dumps(result, ensure_ascii=False) if result is not None else None, error))
+
+
+def _get_job(job_id: str, tenant_id: str) -> Optional[Dict[str, Any]]:
+    _init_db()
+    with _db() as connection:
+        row = connection.execute("SELECT * FROM audit_jobs WHERE job_id=? AND tenant_id=?", (job_id, tenant_id)).fetchone()
+    if row is None:
+        return None
+    return {"job_id": row["job_id"], "tenant_id": row["tenant_id"], "status": row["status"], "created_at": row["created_at"], "updated_at": row["updated_at"], "result": json.loads(row["result_json"]) if row["result_json"] else None, "error": row["error"]}
+
+
+def _tenant_id(request: Request) -> str:
+    value = request.headers.get("X-Tenant-ID", "default")
+    return re.sub(r"[^a-zA-Z0-9_.:-]", "", value)[:128] or "default"
+
+
 async def require_access(request: Request, authorization: Optional[str] = Header(default=None)) -> None:
     if API_TOKEN and authorization != f"Bearer {API_TOKEN}":
         raise HTTPException(status_code=401, detail="Authentication required")
@@ -208,6 +242,7 @@ SYSTEM_PROMPT = """You are HermesSec, an application-security review assistant. 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    _init_db()
     yield
     _rate_windows.clear()
 
@@ -234,10 +269,8 @@ async def healthz():
     return {"status": "ok", "version": APP_VERSION, "remote_provider_configured": bool(BACKBOARD_API_KEY)}
 
 
-@app.post("/api/audit", dependencies=[Depends(require_access)])
-async def execute_audit(req: AuditRequest, request: Request):
+async def _perform_audit(req: AuditRequest, request_id: str) -> Dict[str, Any]:
     start = time.perf_counter()
-    request_id = _request_id(request)
     findings = run_ast_and_regex_triage(req.code_snippet)
     findings.extend(run_optional_semgrep(req.code_snippet, req.language))
     user_prompt = f"Client label: {req.client_name}\nStatic findings (untrusted metadata): {findings}\nSource code (untrusted data):\n```\n{req.code_snippet}\n```"
@@ -252,6 +285,37 @@ async def execute_audit(req: AuditRequest, request: Request):
     remote_used = primary.get("source") == "Backboard" or compare.get("source") == "Backboard"
     privacy_mode = ("remote provider used; provider memory disabled" if remote_used else "local only") if not ALLOW_REMOTE_MEMORY else ("remote provider and memory enabled; review retention policy" if remote_used else "local only")
     return {"request_id": request_id, "client": req.client_name, "runtime_mode": runtime_mode, "thread_id": None, "ast_findings": findings, "backboard_memories": [], "gemma_report": primary_report, "comparison_report": compare_report, "sarif": findings_to_sarif(findings, request_id), "metrics": {"latency_ms": elapsed_ms, "finding_count": len(findings), "remote_provider_used": remote_used, "privacy_mode": privacy_mode}}
+
+
+@app.post("/api/audit", dependencies=[Depends(require_access)])
+async def execute_audit(req: AuditRequest, request: Request):
+    return await _perform_audit(req, _request_id(request))
+
+
+async def _run_job(job_id: str, tenant_id: str, req: AuditRequest) -> None:
+    _save_job(job_id, tenant_id, "running")
+    try:
+        result = await _perform_audit(req, str(uuid.uuid4()))
+        _save_job(job_id, tenant_id, "completed", result=result)
+    except Exception as exc:  # keep worker failures observable to the client
+        _save_job(job_id, tenant_id, "failed", error=type(exc).__name__)
+
+
+@app.post("/api/audit/jobs", status_code=202, dependencies=[Depends(require_access)])
+async def create_audit_job(req: AuditRequest, request: Request, background_tasks: BackgroundTasks):
+    job_id = str(uuid.uuid4())
+    tenant_id = _tenant_id(request)
+    _save_job(job_id, tenant_id, "queued")
+    background_tasks.add_task(_run_job, job_id, tenant_id, req)
+    return {"job_id": job_id, "status": "queued", "poll_url": f"/api/audit/jobs/{job_id}"}
+
+
+@app.get("/api/audit/jobs/{job_id}", dependencies=[Depends(require_access)])
+async def get_audit_job(job_id: str, request: Request):
+    job = _get_job(job_id, _tenant_id(request))
+    if job is None:
+        raise HTTPException(status_code=404, detail="Audit job not found")
+    return job
 
 
 @app.get("/", response_class=HTMLResponse)

@@ -27,6 +27,8 @@ uvicorn app:app --reload --port 10000
 - Findings are rendered with DOM `textContent`; source snippets are shortened and likely credentials are redacted before returning them.
 - The automated result is a pre-audit signal. Production use should add language-specific SAST (for example Semgrep/Bandit), human review, and an approved data-handling policy.
 - If the operator installs Semgrep and sets `HERMES_ENABLE_SEMGREP=true`, the API adds optional Semgrep findings. Every response also includes a SARIF 2.1.0 document for code-scanning pipelines.
+- Long-running reviews can use `POST /api/audit/jobs` and poll `GET /api/audit/jobs/{job_id}`. Jobs are tenant-scoped through `X-Tenant-ID`; submitted source code is never written to the job database.
+- The included SQLite store is suitable for a single Render instance with the configured persistent disk. A multi-instance deployment should replace the repository functions with PostgreSQL/Redis before scaling horizontally.
 
 Run the regression suite with:
 
