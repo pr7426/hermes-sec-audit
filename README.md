@@ -2,6 +2,11 @@
 
 Built for the **Hacktoberfest 2026 Open-Source AI Challenge (Week 2: Side Hustle)**.
 
+HermesSec is an independently maintained, MIT-licensed pre-audit service for
+Python application code. It combines deterministic AST/regex triage with
+optional Semgrep and model-assisted remediation while keeping remote memory
+disabled by default.
+
 HermesSec helps freelance penetration testers and application security consultants productize a **$149 Express Pre-Launch Code Audit** side hustle using **Google Gemma** open-weight models, **Backboard** unified model routing & persistent thread memory (`POST https://app.backboard.io/api/threads/messages`), and **Render** Docker hosting.
 
 ## Features
@@ -35,6 +40,19 @@ Run the regression suite with:
 ```bash
 pytest -q
 ```
+
+The repository runs the same suite in GitHub Actions on Python 3.10, 3.11,
+and 3.12. The automated result is a pre-audit signal, not a replacement for
+language-specific SAST, human review, or an approved client data-handling
+policy.
+
+## Development notes
+
+- Keep `BACKBOARD_API_KEY` and `HERMES_API_TOKEN` in the environment; never
+  commit them or place them in fixtures.
+- Use `HERMES_AUDIT_DB_PATH` to point SQLite at a persistent disk in hosted
+  deployments. The included SQLite store is intended for a single instance.
+- Run `pytest -q` before opening a pull request.
 
 ## License
 MIT License — Open-Source for Hacktoberfest 2026.

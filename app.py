@@ -226,7 +226,9 @@ async def call_backboard_thread(provider: str, model_name: str, system_prompt: s
 async def call_local_ollama(model_name: str, system_prompt: str, user_content: str) -> Dict[str, Any]:
     ollama_model = "gemma2:9b" if "gemma" in model_name.lower() else "qwen2.5-coder:7b"
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(12.0, connect=2.0)) as client:
+        # Ollama is a local service. Do not inherit ambient HTTP(S)/SOCKS proxy
+        # variables, which can break local development and leak local traffic.
+        async with httpx.AsyncClient(timeout=httpx.Timeout(12.0, connect=2.0), trust_env=False) as client:
             resp = await client.post(f"{OLLAMA_BASE_URL}/api/chat", json={"model": ollama_model, "messages": [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_content}], "stream": False})
             resp.raise_for_status()
             data = resp.json()
